@@ -1,0 +1,39 @@
+name: seedguard
+version: "0.1.0"
+description: "Secret firewall: redacts private keys, seed phrases, API keys and one-time codes before they reach the model, and lets only the tools you allow use them while armed."
+author: "quadri"
+manifest_version: 2
+api_version: 1
+license: MIT
+homepage: https://github.com/Investorquab/Seedguard
+tags: [security, secrets, crypto, privacy, redaction]
+requires_hermes: ">=0.19"
+provides_tools: []
+provides_hooks:
+  - pre_tool_call
+  - transform_terminal_output
+  - transform_tool_result
+  - transform_llm_output
+  - pre_gateway_dispatch
+provides_middleware:
+  - llm_request
+  - llm_execution
+  - tool_request
+python_dependencies: []
+config_schema:
+  rehydrate:
+    type: str
+    default: armed
+    description: "never | armed | always - when allowed tools may receive a real secret"
+  rehydrate_tools:
+    type: list
+    default: [terminal, execute_code]
+    description: "Tools that may ever receive a real secret"
+  arm_minutes_default:
+    type: int
+    default: 10
+    description: "Default minutes for /seedguard arm"
+  gateway_inbound:
+    type: bool
+    default: true
+    description: "Redact secrets in incoming chat messages before the agent sees them"

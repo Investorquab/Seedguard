@@ -1,0 +1,4 @@
+# Only used for tooling; Hermes loads the plugin from plugin.yaml + __init__.py.
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

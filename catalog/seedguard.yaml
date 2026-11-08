@@ -1,0 +1,30 @@
+# Draft entry for NousResearch/hermes-agent -> plugin-catalog/seedguard.yaml
+# Fill repo + sha (full 40-char commit) before opening the PR. Schema: plugin-catalog/README.md
+name: seedguard
+title: Seedguard
+description: "Secret firewall: private keys, seed phrases, API keys and 2FA codes become placeholders before they reach the model; armed tools can still use them."
+repo: https://github.com/Investorquab/Seedguard
+sha: "REPLACE_WITH_40_CHAR_COMMIT_SHA"
+version: "0.1.0"
+tier: community
+category: general
+maintainer: Investorquab
+requires_hermes: ">=0.19"
+docs_url: https://github.com/Investorquab/Seedguard#readme
+capabilities:
+  provides_tools: []
+  provides_hooks:
+    - pre_tool_call
+    - transform_terminal_output
+    - transform_tool_result
+    - transform_llm_output
+    - pre_gateway_dispatch
+  provides_middleware:
+    - llm_request
+    - llm_execution
+    - tool_request
+  requires_env: []
+known_issues:
+  - "Auxiliary side-model calls (session titles, compression, smart approvals) don't run middleware: secrets typed in the CLI can reach them. Run /seedguard doctor for the config fixes. Chat-app input is cleaned before storage."
+# image: assets/banner.png        # optional 2:1, pinned to the commit
+# screenshots: [assets/spy.png, assets/blocked.png, assets/status.png]

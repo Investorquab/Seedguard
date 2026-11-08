@@ -1,0 +1,19 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+*.zip
+demo_home/
+/.venv/
+.coverage
+htmlcov/
+.ruff_cache/
+
+# --- Private working docs: kept local, never pushed to the public repo ---
+RESEARCH.md
+VIDEO.md
+CLAUDE.md
+KICKOFF_PROMPT.md
+START_HERE.md
+TASKS.md
+SUBMISSION.md
