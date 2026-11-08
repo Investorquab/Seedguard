@@ -4,11 +4,9 @@
 **Deadline:** Wed **11 Nov 2026, 5:00 PM EST** = 22:00 UTC = **23:00 Lagos (WAT)**
 **To enter:** (1) a PR adding `plugin-catalog/seedguard.yaml` to `NousResearch/hermes-agent`, (2) a demo under 90 s posted on X tagging @NousResearch, (3) both links submitted through the form (find the form link in the announcement thread or the Discord).
 
-Owner's other deadlines: Vibeathon 02 on Mon 9 Nov 22:00 UTC, Total Recall on 10 Nov. Seedguard work fits **10 Nov evening → 11 Nov**.
-
 ---
 
-## Status at handoff (8 Nov 2026)
+## Status (8 Nov 2026)
 
 ### Done and tested
 
@@ -20,13 +18,13 @@ Owner's other deadlines: Vibeathon 02 on Mon 9 Nov 22:00 UTC, Total Recall on 10
 - [x] Redaction of terminal output, tool results, final replies and inbound gateway messages, with a notice asking the agent to tell the user to delete their message
 - [x] `/seedguard` status | arm | disarm | forget | log | test | doctor (`commands.py`, `doctor.py`)
 - [x] `plugin.yaml`
-- [x] **77 tests pass, plus 1 opt-in e2e:**
-  - unit tests
-  - in-process integration: Seedguard loaded by the real Hermes 0.19 `PluginManager`, with real middleware and hook helpers
+- [x] **129 tests pass, plus 2 opt-in Hermes tests** (core-module coverage 93%):
+  - unit + hardening tests (fail-closed, rehydration security, concurrency, performance)
+  - in-process integration: Seedguard loaded by the real Hermes `PluginManager`, with real middleware and hook helpers
   - **real `hermes chat -q` end-to-end** against `devtools/provider_spy.py`
 - [x] `devtools/provider_spy.py`: a mock or logging-proxy provider that shows exactly what the model receives. This is also the demo prop.
-- [x] `devtools/demo_setup.py` (isolated demo home), `.github/workflows/tests.yml` (CI), false-positive corpus, NEAR `ed25519:` keys, and a fix so Solana tx signatures aren't redacted
-- [x] Beginner docs: START_HERE.md, KICKOFF_PROMPT.md, TASKS.md, TESTING.md; CLAUDE.md is now the full autonomous playbook
+- [x] `devtools/demo_setup.py` (isolated demo home), `.github/workflows/tests.yml` (CI), false-positive corpus, NEAR `ed25519:` keys, Sui `suiprivkey1…` (bech32) and Ethereum V3 keystore detectors, and a fix so Solana tx signatures aren't redacted
+- [x] `README.md`, `TESTING.md`, `CHANGELOG.md`
 
 ### End-to-end findings (Hermes 0.19, from PyPI)
 
@@ -49,7 +47,7 @@ Owner's other deadlines: Vibeathon 02 on Mon 9 Nov 22:00 UTC, Total Recall on 10
    - If the security scan flags `devtools/` (urllib network and subprocess in the spy and e2e harness) or `tests/`, move the plugin files into a `plugin/` subfolder and set `subdir: plugin` in the catalog entry. That keeps dev tools out of what users install.
    - **Check auxiliary calls on the latest version.** `grep -rn "apply_llm_request_middleware\|pre_auxiliary_call" agent/auxiliary_client.py`. If the latest Hermes sends aux calls through middleware, or has a modifying `pre_auxiliary_call`, register it and turn the title leak into a pass. If it doesn't, keep the doctor warning and the README limitation. Optionally open an issue asking for the seam; the catalog README says Nous prefers that over patches.
 3. **Pin the catalog entry.** Commit, copy the 40-character SHA into `catalog/seedguard.yaml`, then open the PR adding `plugin-catalog/seedguard.yaml`. Use the PR body in `SUBMISSION.md`.
-4. **Record the demo** (`DEMO.md`). Post it on X tagging @NousResearch, then submit both links on the form.
+4. **Record the demo.** Post it on X tagging @NousResearch, then submit both links on the form.
 
 ### P1: strong stretch goals (pick by time left)
 
@@ -64,7 +62,7 @@ Owner's other deadlines: Vibeathon 02 on Mon 9 Nov 22:00 UTC, Total Recall on 10
    - Keep the name free of `KEY`/`SECRET`/`TOKEN`: `execute_code` strips those.
    - This only works for local backends; fall back to inline for docker/ssh/modal.
    - Add tests.
-7. **More chains:** Sui `suiprivkey1…` (bech32), NEAR `ed25519:` (done), Cosmos mnemonic (same BIP39), Aptos (hex plus context, already covered), Tron (hex).
+7. **More chains:** Sui `suiprivkey1…` (bech32) ✅ done, Ethereum V3 keystore JSON ✅ done, NEAR `ed25519:` ✅ done, Aptos / Tron (hex + context) ✅ covered; Cosmos mnemonic (same BIP39) covered by the seed detector.
 
 ### P2: nice to have
 

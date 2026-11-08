@@ -83,7 +83,7 @@ def main() -> int:
     print("Terminal 2 (left side, chat with Hermes):")
     print(f"  macOS/Linux:  bash \"{home / 'run_hermes.sh'}\"")
     print(f"  Windows:      powershell -File \"{home / 'run_hermes.ps1'}\"\n")
-    print("Inside Hermes, first run:  /seedguard doctor   then follow DEMO.md")
+    print("Inside Hermes, first run:  /seedguard doctor   then walk through your demo flow")
     return 0
 
 
