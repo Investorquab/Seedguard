@@ -109,7 +109,12 @@ def mock_reply(body: dict, args) -> dict:
     saw_tool_result = any(m.get("role") == "tool" for m in msgs[-3:])
     if args.script == "toolcall" and not saw_tool_result:
         _, phs = analyse(body)
-        cmd = f"echo key-length: $(printf %s '{phs[0]}' | wc -c)" if phs else "echo no placeholder seen"
+        # Cross-platform (Windows/macOS/Linux): print the key LENGTH, never the
+        # value. The real key is 66 chars; the placeholder is 21 -- so the number
+        # on screen proves the tool received the real secret while the model only
+        # ever saw the placeholder.
+        cmd = (f'python -c "import sys;print(\'key-length:\',len(sys.argv[1]))" {phs[0]}'
+               if phs else "echo no placeholder seen")
         return {"role": "assistant", "content": None, "tool_calls": [{
             "id": f"call_{STATE['n']}", "type": "function",
             "function": {"name": "terminal", "arguments": json.dumps({"command": cmd})}}]}
