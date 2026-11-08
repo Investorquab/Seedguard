@@ -1,6 +1,13 @@
 # Seedguard
 
-**A secret firewall for Hermes Agent. The model never sees your keys; your tools can still use them.**
+> **A secret firewall for Hermes Agent. The model never sees your keys; your tools can still use them.**
+
+[![Tests](https://github.com/Investorquab/Seedguard/actions/workflows/tests.yml/badge.svg)](https://github.com/Investorquab/Seedguard/actions/workflows/tests.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+![Hermes](https://img.shields.io/badge/Hermes-%E2%89%A50.19-FFB020)
+![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB)
+![Runtime deps](https://img.shields.io/badge/runtime%20deps-0-success)
+![Fail-closed](https://img.shields.io/badge/enforcement-fail--closed-critical)
 
 Paste a seed phrase into Telegram by accident, `cat` a `.env` file, or let the
 agent read an email with a 2FA code, and without protection that secret goes
@@ -12,6 +19,52 @@ while you have armed them.
 ![Seedguard in a live Hermes session: the model replies that it only sees the placeholder `[[sg:SEED_77a6c6]]`, not the seed words, and a private-key tool call is blocked until the user arms it.](assets/seedguard-redaction.png)
 
 *A real Hermes 0.23 session: the agent is handed a seed phrase and a private key (public test vectors), and tells you itself that it only ever saw placeholders. The tool call is blocked until you `/seedguard arm` it.*
+
+## Contents
+
+[Security model](#security-model) · [How it works](#how-it-works) · [What it catches](#what-it-catches) · [Quick start](#quick-start) · [Commands](#commands) · [Configuration](#configuration) · [Hermes surfaces](#how-it-plugs-into-hermes-public-surfaces-only) · [Testing & quality](#testing--quality) · [Compatibility](#compatibility) · [Disclosures](#disclosures) · [Known limitations](#known-limitations-honest-list) · [Development](#development)
+
+## Security model
+
+Seedguard defends **one boundary**: the line between your machine and the model
+provider. It is defense-in-depth across the whole request lifecycle, and it is
+honest about what it does not cover.
+
+**What it guarantees**
+
+- **Nothing in a detected secret format reaches the model through the main loop.**
+  Every provider request is redacted at `llm_request` and re-checked at
+  `llm_execution`. That enforcement layer is **fail-closed**: if redaction itself
+  ever errors, it sends a content-free stub instead of your data, so a bug in
+  Seedguard can never *leak* a secret — at worst it withholds a request.
+- **A real value reaches a tool only under an explicit, narrow grant.** All three
+  must hold: the tool is on the allowlist (`terminal`, `execute_code` by default),
+  the secret is *armed* (or `rehydrate: always`), and rehydration is enabled.
+  Otherwise the tool call is **blocked** and the model is told how to ask you to
+  release it.
+- **Secrets are never written to disk by Seedguard.** Real values live only in
+  process memory and are gone on restart. The event log records *kind, placeholder
+  id, where and when* — never values.
+- **Secrets can't leak back in through tool output.** A dumped `.env` file, email
+  bodies and other tool results are re-scanned before they re-enter the model's context.
+
+**What it is not** (threat boundaries, stated plainly)
+
+- Not a reason to paste real secrets. Prefer test keys; Seedguard is a safety net,
+  not a license to be careless.
+- Detection is heuristic. An unknown secret format, or a bare 64-hex string with no
+  surrounding context, may only be *warned* rather than redacted. Use
+  `/seedguard test <text>` to see exactly what the model would receive.
+- Arming is a deliberate, time-boxed grant of trust. While a secret is armed, a
+  prompt-injected agent *can* use it — but only inside the allowed tool, for the
+  window you set. That is the trade-off that makes tools usable at all.
+- It protects the model boundary, not your local host. An armed value still appears
+  in local process arguments and in your own approval prompt.
+- Hermes' auxiliary side-model calls (titles, compression) bypass plugin middleware
+  — see [Known limitations](#known-limitations-honest-list); `/seedguard doctor`
+  prints the exact config fixes.
+
+## How it works
 
 ```
 you (Telegram) ──► "my seed is abandon abandon … about"
@@ -43,7 +96,11 @@ model sees      ──► the result, with secrets still masked
 | `.env` / JSON secrets | `NAME=value` and `"name": "value"` where the name says KEY/SECRET/TOKEN/PASSWORD/PRIVATE/MNEMONIC/SEED | high |
 | One-time codes | 4–8 digits near "verification code", "OTP", "2FA"… (skips status codes, ports, years) | medium |
 
-## Install
+Verifiable formats (BIP39, WIF, xprv, Sui) are checksum-validated, so they are
+redacted with confidence. Ambiguous formats are context-gated to avoid breaking
+real crypto workflows — a transaction hash or public address is left readable.
+
+## Quick start
 
 ```bash
 hermes plugins install Investorquab/Seedguard --enable
@@ -52,7 +109,18 @@ git clone https://github.com/Investorquab/Seedguard ~/.hermes/plugins/seedguard
 # then add `seedguard` to plugins.enabled in ~/.hermes/config.yaml
 ```
 
-Then run `/seedguard doctor` once (see "Known limitations").
+Run `/seedguard doctor` once after installing — it reports the paths Seedguard
+can't cover in your current Hermes config and prints the one-line fixes.
+
+A typical session:
+
+```text
+you    ▸ my private key is 0x… , what's its address? use the terminal
+hermes ▸ That placeholder is locked — run  /seedguard arm EVM_KEY_0166d0
+you    ▸ /seedguard arm EVM_KEY_0166d0 5
+hermes ▸ (terminal runs with the real key) the address is 0xf39F…2266
+         I only ever saw the placeholder.
+```
 
 ## Commands
 
@@ -97,6 +165,28 @@ Env overrides: `SEEDGUARD_REHYDRATE`, `SEEDGUARD_REHYDRATE_TOOLS`, `SEEDGUARD_AR
 
 No core patching, no network, no dependencies beyond the Python standard library.
 
+## Testing & quality
+
+- **129 tests** (unit, false-positive corpora, fail-closed enforcement, rehydration
+  security, concurrency and performance), plus 2 opt-in Hermes tests.
+- **Core-module coverage ~93%** (`detectors` 95%, `redact` 94%, `hooks` 99%, `vault` 91%).
+- **Validated on the latest Hermes (0.23)**: `hermes plugins validate --install-deps`
+  and `hermes plugins doctor` both pass; install **security scan is clean**; declared
+  capabilities match what the plugin registers.
+- **CI** runs the unit + in-process Hermes integration suites on Python 3.10–3.13.
+- All test material is **public test vectors** (BIP39/BIP32 vectors, the Bitcoin wiki
+  WIF, Anvil account #0) or random bytes generated at test time — never a real key.
+
+See [TESTING.md](TESTING.md) for the test matrix and how to run each layer.
+
+## Compatibility
+
+- **Hermes Agent ≥ 0.19** (verified on 0.19 and 0.23). Older releases without the
+  middleware API load Seedguard in a degraded, hooks-only mode and `/seedguard doctor`
+  warns you.
+- **Python 3.10+**. Standard library only at runtime; `pytest` is a dev/test dependency.
+- Cross-platform (Linux, macOS, Windows).
+
 ## Disclosures
 
 - **Files written:** `~/.hermes/seedguard/hmac.key` (32 random bytes, mode 0600, used to derive stable placeholder ids) and `~/.hermes/seedguard/events.jsonl` (kind, placeholder id, location and time of each event; **never secret values**; disable with `log_events: false`).
@@ -129,4 +219,7 @@ python devtools/provider_spy.py --upstream https://openrouter.ai/api/v1      # l
 
 All test keys are public test vectors (BIP39/BIP32 vectors, the Bitcoin wiki WIF, Anvil account #0) or random bytes generated at test time.
 
-MIT licensed.
+## License
+
+[MIT](LICENSE) © the Seedguard authors. Contributions and issues welcome on
+[GitHub](https://github.com/Investorquab/Seedguard).
