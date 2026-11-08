@@ -28,7 +28,11 @@ def build_runtime(ctx=None, state_dir=None, persist_events=None):
     state = state_dir or (hermes_home() / "seedguard")
     cfg = load_config(ctx, state)
     vault = Vault(state, persist_events=cfg["log_events"] if persist_events is None else persist_events)
-    return Runtime(vault, Redactor(vault, cfg), cfg)
+    rt = Runtime(vault, Redactor(vault, cfg), cfg)
+    # Record middleware support from the public ctx surface (no private imports).
+    if ctx is not None:
+        rt.middleware_supported = hasattr(ctx, "register_middleware")
+    return rt
 
 
 def register(ctx) -> None:

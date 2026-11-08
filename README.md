@@ -87,7 +87,7 @@ Env overrides: `SEEDGUARD_REHYDRATE`, `SEEDGUARD_REHYDRATE_TOOLS`, `SEEDGUARD_AR
 | `llm_execution` middleware | Enforcement layer. Hermes middleware fails open, so this one never raises: if redaction itself fails it sends a content-free stub instead of your data |
 | `tool_request` middleware | Put real values back into args for allowed tools, armed secrets only |
 | `pre_tool_call` hook | Block an executing tool that still carries a locked placeholder, and tell the model how the user can release it |
-| `transform_terminal_output`, `transform_tool_result` | Re-redact tool output (`cat .env`, email bodies) before it enters context |
+| `transform_terminal_output`, `transform_tool_result` | Re-redact secrets in tool output (a dumped `.env` file, email bodies) before it enters context |
 | `transform_llm_output` | Last check on the final reply |
 | `/seedguard` command | Status, arming, log, doctor |
 
@@ -105,9 +105,9 @@ No core patching, no network, no dependencies beyond the Python standard library
 
 ## Known limitations (honest list)
 
-Found with the end-to-end test in `devtools/e2e_check.py` against Hermes 0.19:
+Found with the end-to-end test in `devtools/e2e_check.py` and verified against Hermes 0.19 and 0.23:
 
-1. **Auxiliary side-model calls bypass middleware.** Hermes sends some requests to a side model: session titles, context compression, smart approvals. Those don't go through `llm_request`/`llm_execution`. A secret typed into the **CLI** is stored raw in the session, so the title call can still see it. **Secrets sent through a chat app are cleaned before storage and are safe.** `/seedguard doctor` gives the fixes: turn off `auxiliary.title_generation.enabled`, and use `approvals.mode: manual` while secrets are armed.
+1. **Auxiliary side-model calls bypass middleware.** Hermes sends some requests to a side model: session titles, context compression, smart approvals. Those don't go through `llm_request`/`llm_execution`. A secret typed into the **CLI** is stored raw in the session, so the title call can still see it. **Secrets sent through a chat app are cleaned before storage and are safe.** `/seedguard doctor` gives the fixes: turn off `auxiliary.title_generation.enabled`, and use `approvals.mode: manual` while secrets are armed. *Confirmed on Hermes 0.23:* it adds `pre_auxiliary_call` / `post_auxiliary_call` events, but they are **observer-only** (they carry metrics, not the request body, and their return value is ignored), so they cannot redact the call — the config fixes above remain the mitigation.
 2. **CLI history keeps raw text.** In the CLI, the raw secret stays in your local session DB. Hermes offers no input-rewrite hook for the CLI. It never reaches the main model.
 3. **Armed secrets are visible locally.** An armed secret shows up in the command text of your own approval prompt and in local process arguments.
 4. **Ordering with other plugins.** `transform_tool_result` takes the first string returned. If another plugin returns first, our tool-result redaction is skipped, but the provider request is still redacted by middleware.

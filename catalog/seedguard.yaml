@@ -25,6 +25,6 @@ capabilities:
     - tool_request
   requires_env: []
 known_issues:
-  - "Auxiliary side-model calls (session titles, compression, smart approvals) don't run middleware: secrets typed in the CLI can reach them. Run /seedguard doctor for the config fixes. Chat-app input is cleaned before storage."
+  - "Auxiliary side-model calls (session titles, compression, smart approvals) don't run middleware: secrets typed in the CLI can reach them. Run /seedguard doctor for the config fixes. Chat-app input is cleaned before storage. Confirmed on Hermes 0.23: its new pre_auxiliary_call/post_auxiliary_call events are observer-only (metrics, not request body) and cannot redact the call."
 # image: assets/banner.png        # optional 2:1, pinned to the commit
 # screenshots: [assets/spy.png, assets/blocked.png, assets/status.png]

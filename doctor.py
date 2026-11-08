@@ -50,12 +50,14 @@ def run_checks(rt: Any, cfg: Dict[str, Any] = None) -> List[Tuple[str, str, str]
         if err and not cfg:
             checks.append((INFO, "config", f"Could not read Hermes config ({err}); skipping config checks."))
 
-    try:
-        import hermes_cli.middleware  # noqa: F401
-
+    # Middleware availability comes from the public ctx surface, recorded on the
+    # runtime at registration (no private Hermes imports -- catalog rule 9).
+    supported = getattr(rt, "middleware_supported", None) if rt is not None else None
+    if supported is True:
         checks.append((OK, "middleware", "Provider requests are redacted (llm_request + llm_execution)."))
-    except Exception:
+    elif supported is False:
         checks.append((WARN, "middleware", "This Hermes has no middleware API: provider requests are NOT redacted. Upgrade Hermes."))
+    # supported is None: built outside Hermes (e.g. a unit test) -- skip the check.
 
     if _truthy(_get(cfg, "auxiliary", "title_generation", "enabled"), True):
         checks.append((WARN, "titles",

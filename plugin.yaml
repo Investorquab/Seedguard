@@ -15,6 +15,10 @@ provides_hooks:
   - transform_tool_result
   - transform_llm_output
   - pre_gateway_dispatch
+# Required by `hermes plugins validate` (the catalog gate) to match the
+# runtime ctx.register_middleware calls. Hermes 0.23's manifest loader logs a
+# benign "unknown field" note for this key ("plugin still loads") -- a known
+# inconsistency between its validator and loader; the middleware works either way.
 provides_middleware:
   - llm_request
   - llm_execution

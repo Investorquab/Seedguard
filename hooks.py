@@ -41,6 +41,9 @@ class Runtime:
         self.vault = vault
         self.redactor = redactor
         self.cfg = cfg
+        # Set from the public ctx in build_runtime: True/False when this Hermes
+        # exposes the middleware API, None when built outside Hermes (tests).
+        self.middleware_supported: Optional[bool] = None
         self.stats = {"requests_redacted": 0, "stubbed": 0, "tool_blocks": 0,
                       "rehydrated": 0, "gateway_redactions": 0, "outputs_redacted": 0}
 
