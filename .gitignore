@@ -17,3 +17,7 @@ KICKOFF_PROMPT.md
 START_HERE.md
 TASKS.md
 SUBMISSION.md
+
+# --- Video production + raw screenshots: local only, never pushed ---
+video/
+*Visual Studio Code*.png

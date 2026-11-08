@@ -9,6 +9,10 @@ swaps secrets for placeholders like `[[sg:SEED_3fa9c1]]` before anything leaves
 your machine. It swaps them back only inside the tools you allow, and only
 while you have armed them.
 
+![Seedguard in a live Hermes session: the model replies that it only sees the placeholder `[[sg:SEED_77a6c6]]`, not the seed words, and a private-key tool call is blocked until the user arms it.](assets/seedguard-redaction.png)
+
+*A real Hermes 0.23 session: the agent is handed a seed phrase and a private key (public test vectors), and tells you itself that it only ever saw placeholders. The tool call is blocked until you `/seedguard arm` it.*
+
 ```
 you (Telegram) ──► "my seed is abandon abandon … about"
                     │  pre_gateway_dispatch: redacted before the agent sees it
