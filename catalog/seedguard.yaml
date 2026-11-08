@@ -1,16 +1,16 @@
-# Draft entry for NousResearch/hermes-agent -> plugin-catalog/seedguard.yaml
-# Fill repo + sha (full 40-char commit) before opening the PR. Schema: plugin-catalog/README.md
 name: seedguard
 title: Seedguard
 description: "Secret firewall: private keys, seed phrases, API keys and 2FA codes become placeholders before they reach the model; armed tools can still use them."
 repo: https://github.com/Investorquab/Seedguard
-sha: "REPLACE_WITH_40_CHAR_COMMIT_SHA"
+sha: "459836bf974bd8674ab0ee232c74be3639082f54"
 version: "0.1.0"
 tier: community
 category: general
 maintainer: Investorquab
 requires_hermes: ">=0.19"
 docs_url: https://github.com/Investorquab/Seedguard#readme
+readme: true
+platforms: []
 capabilities:
   provides_tools: []
   provides_hooks:
@@ -26,5 +26,3 @@ capabilities:
   requires_env: []
 known_issues:
   - "Auxiliary side-model calls (session titles, compression, smart approvals) don't run middleware: secrets typed in the CLI can reach them. Run /seedguard doctor for the config fixes. Chat-app input is cleaned before storage. Confirmed on Hermes 0.23: its new pre_auxiliary_call/post_auxiliary_call events are observer-only (metrics, not request body) and cannot redact the call."
-# image: assets/banner.png        # optional 2:1, pinned to the commit
-# screenshots: [assets/spy.png, assets/blocked.png, assets/status.png]
