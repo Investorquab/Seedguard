@@ -215,6 +215,10 @@ Found with the end-to-end test in `devtools/e2e_check.py` and verified against H
 3. **Armed secrets are visible locally.** An armed secret shows up in the command text of your own approval prompt and in local process arguments.
 4. **Ordering with other plugins.** `transform_tool_result` takes the first string returned. If another plugin returns first, our tool-result redaction is skipped, but the provider request is still redacted by middleware.
 5. **Heuristics.** Detection relies on patterns. A 64-hex key with no surrounding context only warns, because it looks like a hash. Run `/seedguard test` to check your formats.
+6. **Encoded or split secrets.** Because detection is pattern-based, a secret that is base64/hex-encoded, compressed, or split across two *separate* tool outputs or streaming chunks can pass the detectors — each fragment on its own doesn't look like a key. The model still only ever sees placeholders for what *is* caught, and if redaction itself ever errors the fail-closed `llm_execution` layer sends a content-free stub, so a detection miss doesn't become an unbounded leak — but an obfuscated secret in the input is a real gap. (Characterized in `tests/test_resolution_boundary.py`.)
+7. **Logs outside the model's context.** Seedguard redacts tool output, terminal output and provider requests as they enter the model's context, but it does not control Hermes' own internal/debug logs, nor anything a tool writes straight to disk or to a file descriptor Seedguard doesn't sit on.
+
+**Not a permission boundary.** Redaction reduces *exposure* to the model and the provider; it is not an authorization layer. Sensitive actions still go through Hermes' own approval/permission gates — rehydration happens in `tool_request` *before* that gate, so your approvals apply on top of Seedguard rather than being replaced by it. Only `tool_request` ever turns a placeholder back into a value; no other hook resolves one (pinned in `tests/test_resolution_boundary.py`).
 
 ## Development
 

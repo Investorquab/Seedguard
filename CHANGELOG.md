@@ -41,8 +41,13 @@ Fixes from the Nous Research catalog review of `f61f05fe`.
   unbounded memory before auth.
 - Tests: per-session isolation (`tests/test_sessions.py`), plugin-settings
   loading (`tests/test_config.py`), regex timing on a 50 KB token
-  (`tests/test_perf_regex.py`), and state-dir selection
-  (`tests/test_state_dir.py`).
+  (`tests/test_perf_regex.py`), state-dir selection (`tests/test_state_dir.py`),
+  and the resolution boundary + detection gaps (`tests/test_resolution_boundary.py`:
+  only `tool_request` rehydrates; encoded / split-across-output secrets are
+  characterized as known gaps).
+- Disclosures: "Known limitations" now spells out encoded/split secrets, the
+  scope of logs, and that redaction is not a permission boundary (approvals run
+  on top, in Hermes' own gate).
 
 ## [0.1.0] — 2026-11-08
 
