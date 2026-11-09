@@ -23,9 +23,9 @@ def build_runtime(ctx=None, state_dir=None, persist_events=None):
     from .config import load_config
     from .hooks import Runtime
     from .redact import Redactor
-    from .vault import Vault, hermes_home
+    from .vault import Vault, default_state_dir
 
-    state = state_dir or (hermes_home() / "seedguard")
+    state = state_dir or default_state_dir()
     cfg = load_config(ctx, state)
     vault = Vault(state, persist_events=cfg["log_events"] if persist_events is None else persist_events)
     rt = Runtime(vault, Redactor(vault, cfg), cfg)

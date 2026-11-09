@@ -3,8 +3,9 @@
 * Secrets live **only in process memory**. Nothing secret is ever written to
   disk by Seedguard.
 * Placeholder ids are ``HMAC-SHA256(install_key, kind|value)[:6]``. The key is
-  random per install and stored at ``$HERMES_HOME/seedguard/hmac.key``
-  (mode 0600). Stable ids mean the same secret gets the same placeholder on
+  random per install and stored at ``<hermes home>/plugin-data/seedguard/hmac.key``
+  (mode 0600; falls back to ``<hermes home>/seedguard`` on older Hermes). Stable
+  ids mean the same secret gets the same placeholder on
   every turn and after restarts, so prompt caching keeps working and old
   placeholders in session history still resolve once the secret is seen again.
 * The event log (``events.jsonl``) records *kind, id, where, when* -- never the
@@ -45,6 +46,25 @@ def hermes_home() -> Path:
         return Path(os.environ.get("HERMES_HOME", Path.home() / ".hermes"))
 
 
+def default_state_dir() -> Path:
+    """Where Seedguard persists its ``hmac.key`` and ``events.jsonl``.
+
+    Prefer Hermes' per-plugin data dir, ``<hermes home>/plugin-data/seedguard``,
+    via the documented ``plugins.plugin_storage.plugin_data_dir`` helper: it
+    survives ``hermes plugins update`` / ``remove`` (which wipe the install dir)
+    and follows the active profile. Fall back to ``<hermes home>/seedguard`` when
+    the running Hermes doesn't expose the helper (older releases) or outside
+    Hermes (unit tests). Only the HMAC key id-derivation seed and the valueless
+    event log live here; real secret values never touch disk.
+    """
+    try:
+        from plugins.plugin_storage import plugin_data_dir  # documented public API
+
+        return Path(plugin_data_dir("seedguard"))
+    except Exception:
+        return hermes_home() / "seedguard"
+
+
 def placeholder(secret_id: str) -> str:
     return f"[[sg:{secret_id}]]"
 
@@ -80,7 +100,7 @@ class Vault:
     def __init__(self, state_dir: Optional[Path] = None, persist_events: bool = True,
                  key: Optional[bytes] = None,
                  max_entries_per_session: int = MAX_ENTRIES_PER_SESSION) -> None:
-        self.state_dir = Path(state_dir) if state_dir else hermes_home() / "seedguard"
+        self.state_dir = Path(state_dir) if state_dir else default_state_dir()
         self.persist_events = persist_events
         self._lock = threading.RLock()
         # session id -> {secret_id -> SecretEntry}. Keyed by conversation so a

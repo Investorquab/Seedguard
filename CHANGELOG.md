@@ -27,13 +27,22 @@ Fixes from the Nous Research catalog review of `f61f05fe`.
   token, which could stall every tool-result hook on tens of KB. Both runs are
   now bounded to `{0,64}`.
 
+### Changed
+
+- **State lives under Hermes' per-plugin data dir.** `hmac.key` and
+  `events.jsonl` now go to `<hermes home>/plugin-data/seedguard/` via the
+  documented `plugins.plugin_storage.plugin_data_dir` helper (survives
+  `hermes plugins update`/`remove`, follows the active profile), falling back to
+  the old `<hermes home>/seedguard/` when that helper isn't available.
+
 ### Added
 
 - Per-session entry cap (256, oldest evicted) so an unadmitted sender cannot pin
   unbounded memory before auth.
 - Tests: per-session isolation (`tests/test_sessions.py`), plugin-settings
-  loading (`tests/test_config.py`), and regex timing on a 50 KB token
-  (`tests/test_perf_regex.py`).
+  loading (`tests/test_config.py`), regex timing on a 50 KB token
+  (`tests/test_perf_regex.py`), and state-dir selection
+  (`tests/test_state_dir.py`).
 
 ## [0.1.0] — 2026-11-08
 
