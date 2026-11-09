@@ -25,6 +25,16 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Deque, Dict, List, Optional
 
+# Secrets are stored per conversation. In the CLI there is one session, so this
+# default bucket is used; on a multi-user gateway each chat gets its own session
+# id (passed by Hermes), so one chat can never see or release another's secrets.
+DEFAULT_SESSION = "local"
+
+# Bound how many distinct secrets a single session may hold. Text from a sender
+# who has not been admitted yet is still scanned, so this caps what an
+# unauthenticated flood can pin in memory; the oldest entry is evicted past it.
+MAX_ENTRIES_PER_SESSION = 256
+
 
 def hermes_home() -> Path:
     try:
@@ -68,11 +78,15 @@ class SecretEntry:
 
 class Vault:
     def __init__(self, state_dir: Optional[Path] = None, persist_events: bool = True,
-                 key: Optional[bytes] = None) -> None:
+                 key: Optional[bytes] = None,
+                 max_entries_per_session: int = MAX_ENTRIES_PER_SESSION) -> None:
         self.state_dir = Path(state_dir) if state_dir else hermes_home() / "seedguard"
         self.persist_events = persist_events
         self._lock = threading.RLock()
-        self._entries: Dict[str, SecretEntry] = {}
+        # session id -> {secret_id -> SecretEntry}. Keyed by conversation so a
+        # placeholder caught in one chat only resolves back in that same chat.
+        self._sessions: Dict[str, Dict[str, SecretEntry]] = {}
+        self._max_entries = max_entries_per_session
         self._events: Deque[dict] = deque(maxlen=500)
         self.warnings = 0
         self._key = key if key is not None else self._load_key()
@@ -103,49 +117,56 @@ class Vault:
         mac = hmac.new(self._key, f"{kind}|{value}".encode("utf-8"), hashlib.sha256).hexdigest()
         return f"{kind}_{mac[:6]}"
 
-    def register(self, kind: str, value: str, detail: str = "") -> str:
+    def register(self, kind: str, value: str, detail: str = "",
+                 session: str = DEFAULT_SESSION) -> str:
         sid = self.secret_id(kind, value)
         with self._lock:
-            entry = self._entries.get(sid)
+            bucket = self._sessions.setdefault(session or DEFAULT_SESSION, {})
+            entry = bucket.get(sid)
             if entry is None:
+                # Keep memory bounded: drop the oldest secret past the cap.
+                if len(bucket) >= self._max_entries:
+                    oldest = min(bucket, key=lambda k: bucket[k].first_seen)
+                    del bucket[oldest]
                 entry = SecretEntry(sid, kind, value, detail)
-                self._entries[sid] = entry
+                bucket[sid] = entry
             entry.hits += 1
         return sid
 
-    def get(self, secret_id: str) -> Optional[SecretEntry]:
+    def get(self, secret_id: str, session: str = DEFAULT_SESSION) -> Optional[SecretEntry]:
         with self._lock:
-            return self._entries.get(secret_id)
+            return self._sessions.get(session or DEFAULT_SESSION, {}).get(secret_id)
 
-    def entries(self) -> List[SecretEntry]:
+    def entries(self, session: str = DEFAULT_SESSION) -> List[SecretEntry]:
         with self._lock:
-            return list(self._entries.values())
+            return list(self._sessions.get(session or DEFAULT_SESSION, {}).values())
 
-    def arm(self, target: str, minutes: float) -> List[str]:
-        """Arm one id (or 'all'). Returns the ids that were armed."""
+    def arm(self, target: str, minutes: float, session: str = DEFAULT_SESSION) -> List[str]:
+        """Arm one id (or 'all') in a session. Returns the ids that were armed."""
         until = time.time() + minutes * 60
         armed = []
         with self._lock:
-            for sid, entry in self._entries.items():
+            for sid, entry in self._sessions.get(session or DEFAULT_SESSION, {}).items():
                 if target in ("all", sid, placeholder(sid)):
                     entry.armed_until = until
                     armed.append(sid)
         return armed
 
-    def disarm(self, target: str = "all") -> List[str]:
+    def disarm(self, target: str = "all", session: str = DEFAULT_SESSION) -> List[str]:
         out = []
         with self._lock:
-            for sid, entry in self._entries.items():
+            for sid, entry in self._sessions.get(session or DEFAULT_SESSION, {}).items():
                 if target in ("all", sid, placeholder(sid)) and entry.armed_until:
                     entry.armed_until = 0.0
                     out.append(sid)
         return out
 
-    def forget(self, target: str = "all") -> int:
+    def forget(self, target: str = "all", session: str = DEFAULT_SESSION) -> int:
         with self._lock:
-            ids = [sid for sid in self._entries if target in ("all", sid, placeholder(sid))]
+            bucket = self._sessions.get(session or DEFAULT_SESSION, {})
+            ids = [sid for sid in bucket if target in ("all", sid, placeholder(sid))]
             for sid in ids:
-                del self._entries[sid]
+                del bucket[sid]
         return len(ids)
 
     # -- events --------------------------------------------------------------

@@ -16,7 +16,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from .config import enabled_detectors
 from .detectors import PLACEHOLDER_RE, REDACT, WARN, Finding, detect_all
-from .vault import Vault, placeholder
+from .vault import DEFAULT_SESSION, Vault, placeholder
 
 # Keys in a provider request whose values must never be rewritten: transport
 # settings, auth headers, tool schemas, ids.
@@ -41,26 +41,31 @@ class Redactor:
         self.vault = vault
         self.cfg = cfg
         self._enabled = enabled_detectors(cfg)
-        self._cache: "OrderedDict[str, Tuple[str, Tuple[Finding, ...]]]" = OrderedDict()
+        self._cache: "OrderedDict[Tuple[str, str], Tuple[str, Tuple[Finding, ...]]]" = OrderedDict()
         self._cache_lock = threading.Lock()
         self._cache_max = 4096
 
     # -- text ----------------------------------------------------------------
 
-    def redact_text(self, text: str, where: str = "unknown", log: bool = True) -> Tuple[str, List[Finding]]:
+    def redact_text(self, text: str, where: str = "unknown", log: bool = True,
+                    session: str = DEFAULT_SESSION) -> Tuple[str, List[Finding]]:
         if not isinstance(text, str) or not text or len(text) > MAX_SCAN_CHARS:
             return text, []
+        # The cache is keyed by (session, text): the same secret must land in the
+        # caller's own session bucket, so a cache hit from another session can't
+        # skip that registration.
+        cache_key = (session or DEFAULT_SESSION, text)
         with self._cache_lock:
-            cached = self._cache.get(text)
+            cached = self._cache.get(cache_key)
             if cached is not None:
-                self._cache.move_to_end(text)
+                self._cache.move_to_end(cache_key)
         if cached is not None:
             new_text, findings = cached
             return new_text, list(findings)
 
         findings = detect_all(text, self._enabled)
         if not findings:
-            self._remember(text, text, ())
+            self._remember(cache_key, text, ())
             return text, []
 
         parts: List[str] = []
@@ -70,7 +75,7 @@ class Redactor:
                 if log:
                     self.vault.log(where, f.kind, None, WARN, f.detail)
                 continue
-            sid = self.vault.register(f.kind, f.value, f.detail)
+            sid = self.vault.register(f.kind, f.value, f.detail, session)
             parts.append(text[cursor:f.start])
             parts.append(placeholder(sid))
             cursor = f.end
@@ -78,10 +83,10 @@ class Redactor:
                 self.vault.log(where, f.kind, sid, REDACT, f.detail)
         parts.append(text[cursor:])
         new_text = "".join(parts)
-        self._remember(text, new_text, tuple(findings))
+        self._remember(cache_key, new_text, tuple(findings))
         return new_text, findings
 
-    def _remember(self, key: str, value: str, findings: Tuple[Finding, ...]) -> None:
+    def _remember(self, key: Tuple[str, str], value: str, findings: Tuple[Finding, ...]) -> None:
         with self._cache_lock:
             self._cache[key] = (value, findings)
             self._cache.move_to_end(key)
@@ -94,7 +99,8 @@ class Redactor:
 
     # -- nested objects (provider requests, tool args) -----------------------
 
-    def redact_obj(self, obj: Any, where: str = "unknown", skip_keys: Iterable[str] = SKIP_KEYS) -> Tuple[Any, List[Finding]]:
+    def redact_obj(self, obj: Any, where: str = "unknown", skip_keys: Iterable[str] = SKIP_KEYS,
+                   session: str = DEFAULT_SESSION) -> Tuple[Any, List[Finding]]:
         skip = frozenset(skip_keys)
         found: List[Finding] = []
 
@@ -104,7 +110,7 @@ class Redactor:
             if isinstance(node, str):
                 if node.startswith("data:") and len(node) > 256:
                     return node  # inline image / file payload
-                new, fs = self.redact_text(node, where)
+                new, fs = self.redact_text(node, where, session=session)
                 found.extend(fs)
                 return new
             if isinstance(node, dict):
@@ -138,12 +144,15 @@ class Redactor:
 
     # -- rehydration ---------------------------------------------------------
 
-    def rehydrate_obj(self, obj: Any, tool_name: str) -> Tuple[Any, List[str], List[str]]:
+    def rehydrate_obj(self, obj: Any, tool_name: str,
+                      session: str = DEFAULT_SESSION) -> Tuple[Any, List[str], List[str]]:
         """Replace placeholders with real values where policy allows.
 
         Returns ``(new_obj, used_ids, locked_ids)``. ``locked_ids`` are
-        placeholders that were present but not released (unknown, unarmed,
-        or tool not allowed). Callers block the tool call when it is non-empty.
+        placeholders that were present but not released (unknown *in this
+        session*, unarmed, or tool not allowed). Callers block the tool call
+        when it is non-empty. Only secrets caught in ``session`` can resolve, so
+        a placeholder that leaks into another chat never releases its value.
         """
         mode = self.cfg.get("rehydrate", "armed")
         allowed_tools = set(self.cfg.get("rehydrate_tools") or [])
@@ -152,7 +161,7 @@ class Redactor:
 
         def sub(match: Any) -> str:
             sid = f"{match.group(1)}_{match.group(2)}"
-            entry = self.vault.get(sid)
+            entry = self.vault.get(sid, session)
             ok = (
                 entry is not None
                 and mode != "never"

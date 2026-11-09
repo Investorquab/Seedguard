@@ -18,7 +18,7 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from .hooks import Runtime
+from .hooks import Runtime, session_of
 
 HELP = __doc__.split("Subcommands", 1)[1].split("\n", 2)[2].rstrip()
 
@@ -33,10 +33,13 @@ def _fmt_age(ts: float) -> str:
 
 
 def make_handler(rt: Runtime):
-    def handler(raw_args: Any = "", *_: Any, **__: Any) -> str:
+    def handler(raw_args: Any = "", *_: Any, **kwargs: Any) -> str:
         args = (raw_args or "").strip().split()
         sub = args[0].lower() if args else "status"
         rest = args[1:]
+        # Act only on the chat that ran the command: on a multi-user gateway
+        # /seedguard status|arm|disarm|forget must not reach another chat's secrets.
+        session = session_of(kwargs)
 
         if sub in ("help", "-h", "--help"):
             return "Seedguard commands:\n" + HELP
@@ -47,7 +50,7 @@ def make_handler(rt: Runtime):
             return format_report(run_checks(rt))
 
         if sub == "status":
-            entries = rt.vault.entries()
+            entries = rt.vault.entries(session)
             mode = rt.cfg.get("rehydrate")
             tools = ", ".join(rt.cfg.get("rehydrate_tools") or []) or "none"
             head = (f"Seedguard is on. Rehydration: {mode} (tools: {tools}). "
@@ -79,7 +82,7 @@ def make_handler(rt: Runtime):
             target = rest[0].strip()
             if target.startswith("[[sg:") and target.endswith("]]"):
                 target = target[5:-2]
-            armed = rt.vault.arm(target, minutes)
+            armed = rt.vault.arm(target, minutes, session)
             if not armed:
                 return f"No protected secret matches '{rest[0]}'. Run /seedguard status."
             tools = ", ".join(rt.cfg.get("rehydrate_tools") or [])
@@ -88,12 +91,12 @@ def make_handler(rt: Runtime):
 
         if sub == "disarm":
             target = rest[0] if rest else "all"
-            done = rt.vault.disarm(target)
+            done = rt.vault.disarm(target, session)
             return f"Locked {', '.join(done)}." if done else "Nothing was armed."
 
         if sub == "forget":
             target = rest[0] if rest else "all"
-            n = rt.vault.forget(target)
+            n = rt.vault.forget(target, session)
             rt.redactor.clear_cache()
             return f"Forgot {n} secret(s). Their placeholders will no longer resolve."
 
@@ -117,7 +120,7 @@ def make_handler(rt: Runtime):
             text = (raw_args or "").strip()[len(args[0]):].strip()
             if not text:
                 return "Usage: /seedguard test <text>"
-            new, findings = rt.redactor.redact_text(text, where="test", log=False)
+            new, findings = rt.redactor.redact_text(text, where="test", log=False, session=session)
             if not findings:
                 return "Nothing detected."
             lines = [f"- {f.kind} ({f.confidence}, {f.detail}) -> {f.action}" for f in findings]

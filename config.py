@@ -2,10 +2,9 @@
 
 Precedence (lowest -> highest):
 1. ``DEFAULTS`` below
-2. ``plugins.entries.seedguard`` in Hermes config, via ``ctx.get_config`` when
-   the running Hermes exposes it (newer releases)
-3. ``$HERMES_HOME/seedguard/config.yaml`` (optional)
-4. Environment variables ``SEEDGUARD_*``
+2. ``plugins.entries.seedguard.settings`` in Hermes config, read one key at a
+   time via ``ctx.get_config(key, default)`` (its real signature)
+3. Environment variables ``SEEDGUARD_*``
 """
 
 from __future__ import annotations
@@ -50,24 +49,31 @@ def _truthy(value: str) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+_SENTINEL = object()
+
+# Every setting Seedguard honours from Hermes plugin config. ``ctx.get_config``
+# takes a key (``get_config(key, default=None)``), so each is read by name --
+# calling it with no key raised a swallowed TypeError, which is why settings
+# never applied before.
+_CONFIG_KEYS = ("rehydrate", "rehydrate_tools", "arm_minutes_default",
+                "gateway_inbound", "notify_agent", "log_events", "detect")
+
+
 def load_config(ctx: Any = None, state_dir: Optional[Path] = None) -> Dict[str, Any]:
     cfg = copy.deepcopy(DEFAULTS)
 
     if ctx is not None and hasattr(ctx, "get_config"):
-        try:
-            _deep_merge(cfg, ctx.get_config() or {})
-        except Exception:
-            pass
-
-    if state_dir is not None:
-        path = Path(state_dir) / "config.yaml"
-        if path.exists():
+        for key in _CONFIG_KEYS:
             try:
-                import yaml  # type: ignore
-
-                _deep_merge(cfg, yaml.safe_load(path.read_text(encoding="utf-8")) or {})
+                val = ctx.get_config(key, _SENTINEL)
             except Exception:
-                pass
+                continue
+            if val is _SENTINEL or val is None:
+                continue
+            if key == "detect" and isinstance(val, dict):
+                _deep_merge(cfg["detect"], val)
+            else:
+                cfg[key] = val
 
     env = os.environ
     if env.get("SEEDGUARD_REHYDRATE"):

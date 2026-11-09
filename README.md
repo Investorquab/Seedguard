@@ -136,19 +136,28 @@ hermes ▸ (terminal runs with the real key) the address is 0xf39F…2266
 
 ## Configuration
 
-Defaults are safe. To change them, use `~/.hermes/seedguard/config.yaml` or env vars:
+Defaults are safe. To change them, set Hermes plugin settings (read through
+`ctx.get_config`, one key at a time) in your Hermes config, under
+`plugins.entries.seedguard.settings`:
 
 ```yaml
-rehydrate: armed            # never | armed | always
-rehydrate_tools: [terminal, execute_code]   # the only tools that can ever get a real value
-arm_minutes_default: 10
-gateway_inbound: true       # clean chat-app messages before the agent sees them
-notify_agent: true          # tell the agent so it warns you to delete the message
-detect: {otp: true, seed: true, hex_keys: true, ...}
+plugins:
+  entries:
+    seedguard:
+      settings:
+        rehydrate: armed            # never | armed | always
+        rehydrate_tools: [terminal, execute_code]   # the only tools that can ever get a real value
+        arm_minutes_default: 10
+        gateway_inbound: true       # clean chat-app messages before the agent sees them
+        notify_agent: true          # tell the agent so it warns you to delete the message
+        detect: {otp: true, seed: true, hex_keys: true}   # per-detector switches
 ```
 
-Env overrides: `SEEDGUARD_REHYDRATE`, `SEEDGUARD_REHYDRATE_TOOLS`, `SEEDGUARD_ARM_MINUTES`,
-`SEEDGUARD_OTP`, `SEEDGUARD_GATEWAY_INBOUND`.
+Env overrides (highest precedence, no Hermes config needed): `SEEDGUARD_REHYDRATE`,
+`SEEDGUARD_REHYDRATE_TOOLS`, `SEEDGUARD_ARM_MINUTES`, `SEEDGUARD_OTP`, `SEEDGUARD_GATEWAY_INBOUND`.
+
+Seedguard keeps no config file of its own, so it pulls in no YAML parser at
+runtime (standard library only).
 
 ## How it plugs into Hermes (public surfaces only)
 
@@ -190,7 +199,7 @@ See [TESTING.md](TESTING.md) for the test matrix and how to run each layer.
 ## Disclosures
 
 - **Files written:** `~/.hermes/seedguard/hmac.key` (32 random bytes, mode 0600, used to derive stable placeholder ids) and `~/.hermes/seedguard/events.jsonl` (kind, placeholder id, location and time of each event; **never secret values**; disable with `log_events: false`).
-- **Secret storage:** real values are held **only in process memory** and are gone on restart.
+- **Secret storage:** real values are held **only in process memory** and are gone on restart. They are **scoped per conversation**: a secret caught in one chat is only visible to `/seedguard status|arm|disarm|forget` from that same chat, and a placeholder that leaks into another chat never resolves there. Each session holds at most 256 distinct secrets (oldest evicted past that), so an unauthenticated sender cannot pin unbounded memory.
 - **Secrets released to tools:** when you arm a secret, or set `rehydrate: always`, the allowed tools (`terminal`, `execute_code` by default) receive the real value. Arming means trusting the agent with that secret for that window. A prompt-injected agent could misuse it, which is why arming is opt-in, time-limited and limited to specific tools.
 - **Request rewriting:** Seedguard modifies provider requests, tool arguments, tool results, final replies and inbound chat messages as described above.
 - **Config read:** `/seedguard doctor` reads Hermes `config.yaml` read-only.

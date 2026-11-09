@@ -29,11 +29,46 @@ import logging
 from typing import Any, Callable, Dict, Optional
 
 from .redact import Redactor, placeholders_in, stub_request
-from .vault import Vault, placeholder
+from .vault import DEFAULT_SESSION, Vault, placeholder
 
 logger = logging.getLogger("seedguard")
 
 SOURCE = "seedguard"
+
+
+def session_of(kwargs: Dict[str, Any], event: Any = None) -> str:
+    """The conversation id for this call, so secrets stay scoped to one chat.
+
+    Hermes passes ``session_id`` to the middleware/hooks and to the command
+    handler; on a gateway it also carries a session on the event. When nothing
+    is available (the CLI, or a unit test) we use the single default session.
+    """
+    for key in ("session_id", "session", "chat_id", "conversation_id"):
+        v = kwargs.get(key)
+        if v is None:
+            continue
+        if isinstance(v, (str, int)):
+            s = str(v).strip()
+            if s:
+                return s
+        sid = getattr(v, "id", None) or getattr(v, "session_id", None)
+        if sid:
+            return str(sid)
+    containers = [event if event is not None else kwargs.get("event"),
+                  kwargs.get("ctx"), kwargs.get("context")]
+    for ev in containers:
+        if ev is None:
+            continue
+        for attr in ("session_id", "chat_id", "conversation_id"):
+            val = getattr(ev, attr, None)
+            if val:
+                return str(val)
+        sess = getattr(ev, "session", None)
+        if sess is not None:
+            sid = getattr(sess, "id", None) or getattr(sess, "session_id", None)
+            if sid:
+                return str(sid)
+    return DEFAULT_SESSION
 
 
 class Runtime:
@@ -59,11 +94,12 @@ def _summary(findings) -> str:
 def build_callbacks(rt: Runtime) -> Dict[str, Callable[..., Any]]:
 
     # 2. llm_request ---------------------------------------------------------
-    def on_llm_request(request: Any = None, **_: Any) -> Optional[dict]:
+    def on_llm_request(request: Any = None, **kwargs: Any) -> Optional[dict]:
         try:
             if not isinstance(request, dict):
                 return None
-            new, findings = rt.redactor.redact_obj(request, where="llm_request")
+            new, findings = rt.redactor.redact_obj(request, where="llm_request",
+                                                   session=session_of(kwargs))
             if not any(f.action == "redact" for f in findings):
                 return None
             rt.stats["requests_redacted"] += 1
@@ -73,9 +109,10 @@ def build_callbacks(rt: Runtime) -> Dict[str, Callable[..., Any]]:
             return None
 
     # 3. llm_execution (fail-closed) ----------------------------------------
-    def on_llm_execution(request: Any = None, next_call: Any = None, **_: Any) -> Any:
+    def on_llm_execution(request: Any = None, next_call: Any = None, **kwargs: Any) -> Any:
         try:
-            safe, findings = rt.redactor.redact_obj(request, where="llm_execution")
+            safe, findings = rt.redactor.redact_obj(request, where="llm_execution",
+                                                    session=session_of(kwargs))
             if any(f.action == "redact" for f in findings):
                 # Layer 2 missed something (or failed). Count it: it is a bug signal.
                 rt.stats["requests_redacted"] += 1
@@ -90,16 +127,17 @@ def build_callbacks(rt: Runtime) -> Dict[str, Callable[..., Any]]:
         return next_call(safe)
 
     # 4. tool_request (rehydrate) -------------------------------------------
-    def on_tool_request(tool_name: str = "", args: Any = None, **_: Any) -> Optional[dict]:
+    def on_tool_request(tool_name: str = "", args: Any = None, **kwargs: Any) -> Optional[dict]:
         try:
             if not isinstance(args, dict) or not placeholders_in(args):
                 return None
-            new, used, _locked = rt.redactor.rehydrate_obj(args, tool_name)
+            session = session_of(kwargs)
+            new, used, _locked = rt.redactor.rehydrate_obj(args, tool_name, session=session)
             if not used:
                 return None
             rt.stats["rehydrated"] += len(used)
             for sid in used:
-                entry = rt.vault.get(sid)
+                entry = rt.vault.get(sid, session)
                 rt.vault.log(f"tool:{tool_name}", entry.kind if entry else "?", sid, "rehydrate")
             return {"args": new, "source": SOURCE, "reason": f"released {len(used)} secret(s) to {tool_name}"}
         except Exception as exc:
@@ -107,11 +145,12 @@ def build_callbacks(rt: Runtime) -> Dict[str, Callable[..., Any]]:
             return None
 
     # 5. pre_tool_call (block locked placeholders) --------------------------
-    def on_pre_tool_call(tool_name: str = "", args: Any = None, **_: Any) -> Optional[dict]:
+    def on_pre_tool_call(tool_name: str = "", args: Any = None, **kwargs: Any) -> Optional[dict]:
         try:
             ids = placeholders_in(args) if args else []
             if not ids:
                 return None
+            session = session_of(kwargs)
             allowed = rt.cfg.get("rehydrate_tools") or []
             if tool_name not in allowed:
                 # Other tools just receive the literal placeholder text (e.g. a
@@ -123,7 +162,7 @@ def build_callbacks(rt: Runtime) -> Dict[str, Callable[..., Any]]:
             rt.stats["tool_blocks"] += 1
             lines = []
             for sid in sorted(set(ids)):
-                entry = rt.vault.get(sid)
+                entry = rt.vault.get(sid, session)
                 if entry is None:
                     why = "is unknown in this session (the user must paste it again)"
                 elif tool_name not in allowed:
@@ -145,32 +184,35 @@ def build_callbacks(rt: Runtime) -> Dict[str, Callable[..., Any]]:
             return None
 
     # 6. tool output ---------------------------------------------------------
-    def on_transform_terminal_output(output: Any = None, **_: Any) -> Optional[str]:
+    def on_transform_terminal_output(output: Any = None, **kwargs: Any) -> Optional[str]:
         try:
             if not isinstance(output, str):
                 return None
-            new, findings = rt.redactor.redact_text(output, where="terminal_output")
+            new, findings = rt.redactor.redact_text(output, where="terminal_output",
+                                                    session=session_of(kwargs))
             return new if new != output else None
         except Exception as exc:
             logger.warning("seedguard transform_terminal_output failed: %s", exc)
             return None
 
-    def on_transform_tool_result(result: Any = None, tool_name: str = "", **_: Any) -> Optional[str]:
+    def on_transform_tool_result(result: Any = None, tool_name: str = "", **kwargs: Any) -> Optional[str]:
         try:
             if not isinstance(result, str):
                 return None
-            new, findings = rt.redactor.redact_text(result, where=f"tool_result:{tool_name}")
+            new, findings = rt.redactor.redact_text(result, where=f"tool_result:{tool_name}",
+                                                    session=session_of(kwargs))
             return new if new != result else None
         except Exception as exc:
             logger.warning("seedguard transform_tool_result failed: %s", exc)
             return None
 
     # 7. final reply ---------------------------------------------------------
-    def on_transform_llm_output(response_text: Any = None, **_: Any) -> Optional[str]:
+    def on_transform_llm_output(response_text: Any = None, **kwargs: Any) -> Optional[str]:
         try:
             if not isinstance(response_text, str):
                 return None
-            new, findings = rt.redactor.redact_text(response_text, where="llm_output")
+            new, findings = rt.redactor.redact_text(response_text, where="llm_output",
+                                                    session=session_of(kwargs))
             if new != response_text:
                 rt.stats["outputs_redacted"] += 1
                 return new
@@ -180,14 +222,15 @@ def build_callbacks(rt: Runtime) -> Dict[str, Callable[..., Any]]:
             return None
 
     # 1. inbound chat messages ----------------------------------------------
-    def on_pre_gateway_dispatch(event: Any = None, **_: Any) -> Optional[dict]:
+    def on_pre_gateway_dispatch(event: Any = None, **kwargs: Any) -> Optional[dict]:
         try:
             if not rt.cfg.get("gateway_inbound", True):
                 return None
             text = getattr(event, "text", None)
             if not isinstance(text, str) or not text:
                 return None
-            new, findings = rt.redactor.redact_text(text, where="gateway_inbound")
+            new, findings = rt.redactor.redact_text(text, where="gateway_inbound",
+                                                    session=session_of(kwargs, event=event))
             if new == text:
                 return None
             rt.stats["gateway_redactions"] += 1

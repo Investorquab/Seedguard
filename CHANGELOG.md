@@ -3,6 +3,38 @@
 All notable changes to Seedguard are documented here.
 This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.1.1] — 2026-11-09
+
+Fixes from the Nous Research catalog review of `f61f05fe`.
+
+### Fixed
+
+- **Plugin settings now apply.** `ctx.get_config` is read one key at a time
+  (`get_config(key, default)`), not called with no key — the old keyless call
+  raised a swallowed `TypeError`, so `plugins.entries.seedguard.settings` and the
+  `config_schema` never took effect (e.g. `rehydrate: never` was ignored). Also
+  dropped the optional `seedguard/config.yaml` route, which imported a non-core
+  `yaml` and was silently skipped on a stock install; configuration is now Hermes
+  plugin settings plus `SEEDGUARD_*` env vars only (still standard-library only).
+- **Secrets are scoped per conversation.** The vault was process-wide, so on a
+  multi-user gateway `/seedguard status` listed every chat's secrets, `arm all`
+  armed them all, and a tool call in chat B carrying chat A's placeholder got
+  A's real value. Entries are now keyed by `session_id`; `status|arm|disarm|forget`
+  act only on the calling chat, and a placeholder only resolves in the session
+  that caught it.
+- **Bounded the `NAME=value` detector regex.** `_SECRET_NAME` had two unbounded
+  `[A-Za-z0-9_]*` runs around the keyword group — quadratic on a long unbroken
+  token, which could stall every tool-result hook on tens of KB. Both runs are
+  now bounded to `{0,64}`.
+
+### Added
+
+- Per-session entry cap (256, oldest evicted) so an unadmitted sender cannot pin
+  unbounded memory before auth.
+- Tests: per-session isolation (`tests/test_sessions.py`), plugin-settings
+  loading (`tests/test_config.py`), and regex timing on a 50 KB token
+  (`tests/test_perf_regex.py`).
+
 ## [0.1.0] — 2026-11-08
 
 First public release: a secret firewall for Hermes Agent. The model never sees

@@ -356,7 +356,10 @@ def detect_api_keys(text: str) -> List[Finding]:
 # NAME=value assignments (.env files, shell exports, JSON configs)
 # ---------------------------------------------------------------------------
 
-_SECRET_NAME = r"[A-Za-z0-9_]*(?:KEY|SECRET|TOKEN|PASSWORD|PASSWD|PRIVATE|MNEMONIC|SEED|key|secret|token|password|passwd|private|mnemonic|seed)[A-Za-z0-9_]*"
+# The ``{0,64}`` bounds keep this linear: two *unbounded* ``[A-Za-z0-9_]*`` runs
+# around the keyword are quadratic on a long unbroken token full of keyword
+# substrings, which would stall every tool-result hook on a few tens of KB.
+_SECRET_NAME = r"[A-Za-z0-9_]{0,64}(?:KEY|SECRET|TOKEN|PASSWORD|PASSWD|PRIVATE|MNEMONIC|SEED|key|secret|token|password|passwd|private|mnemonic|seed)[A-Za-z0-9_]{0,64}"
 _ENV_QUOTED_RE = re.compile(rf"(?m)(?:^|(?<=\s))(?:export\s+)?({_SECRET_NAME})\s*[=:]\s*(['\"])(.{{8,}}?)\2")
 _ENV_BARE_RE = re.compile(rf"(?m)(?:^|(?<=\s))(?:export\s+)?({_SECRET_NAME})\s*=\s*([^\s'\"#]{{8,}})")
 _JSON_RE = re.compile(rf"([\"'])({_SECRET_NAME})\1\s*:\s*([\"'])([^\"'\n]{{8,}})\3")
