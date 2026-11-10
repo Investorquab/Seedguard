@@ -1,5 +1,5 @@
 name: seedguard
-version: "0.1.1"
+version: "0.1.2"
 description: "Secret firewall: redacts private keys, seed phrases, API keys and one-time codes before they reach the model, and lets only the tools you allow use them while armed."
 author: "quadri"
 manifest_version: 2

@@ -3,6 +3,33 @@
 All notable changes to Seedguard are documented here.
 This project follows [Semantic Versioning](https://semver.org/).
 
+## [0.1.2] — 2026-11-10
+
+Fixes from the second Nous Research catalog review (delta from `28c7a8dc`).
+
+### Fixed
+
+- **Vault is now keyed by chat identity, not a shared `"local"` bucket.** The old
+  `session_of` looked for `session_id`/`chat_id` on the gateway `MessageEvent` and
+  on `transform_terminal_output`, but a `MessageEvent` carries neither (the chat id
+  is on `event.source`), so every gateway inbound catch and every terminal-output
+  catch fell into one shared bucket. Effect: a secret pasted in a chat could never
+  be armed from that chat (the README's headline flow), and `/seedguard status` /
+  `forget all` in a chat with no stored session listed or wiped *every other* chat's
+  catches. No real secret values leaked. The vault is now keyed by a chat identity
+  every layer computes the same way — from `event.source` on `pre_gateway_dispatch`,
+  from `gateway.session_context.get_session_env("HERMES_SESSION_PLATFORM" /
+  "…CHAT_ID" / "…THREAD_ID" / "…USER_ID")` on the request/tool/output paths, and from
+  the `source` the slash command is handed. Off a gateway (CLI/TUI/desktop) there is
+  a single local session; a gateway message or command whose chat can't be
+  identified is refused, never folded into a shared bucket. For a shared (non-DM)
+  chat the inbound/command key mirrors Hermes' own `session_env_source` normalization
+  (which drops the user from the turn-path route in e.g. Telegram observe mode), so a
+  secret armed in a group is still released to its tools there.
+  (+`tests/test_sessions.py`, now exercising the real `MessageEvent`/`SessionSource`
+  shape instead of a fabricated `event.session_id`, incl. inbound==command==turn key
+  parity in DMs and shared chats.)
+
 ## [0.1.1] — 2026-11-09
 
 Fixes from the Nous Research catalog review of `f61f05fe`.

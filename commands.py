@@ -18,7 +18,7 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from .hooks import Runtime, session_of
+from .hooks import NO_SESSION, Runtime, session_of
 
 HELP = __doc__.split("Subcommands", 1)[1].split("\n", 2)[2].rstrip()
 
@@ -39,7 +39,8 @@ def make_handler(rt: Runtime):
         rest = args[1:]
         # Act only on the chat that ran the command: on a multi-user gateway
         # /seedguard status|arm|disarm|forget must not reach another chat's secrets.
-        session = session_of(kwargs)
+        # Core passes a SessionSource as ``source`` on a gateway (None on the CLI).
+        session = session_of(kwargs, command=True)
 
         if sub in ("help", "-h", "--help"):
             return "Seedguard commands:\n" + HELP
@@ -48,6 +49,13 @@ def make_handler(rt: Runtime):
             from .doctor import format_report, run_checks
 
             return format_report(run_checks(rt))
+
+        # A gateway chat we could not identify: refuse rather than read or wipe
+        # another conversation's secrets out of a shared bucket.
+        if session == NO_SESSION and sub in ("status", "arm", "disarm", "forget"):
+            return ("Seedguard: no session. I couldn't identify this chat, so I won't "
+                    "touch another conversation's secrets. Run this from the chat where "
+                    "the secret was caught.")
 
         if sub == "status":
             entries = rt.vault.entries(session)

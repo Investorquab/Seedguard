@@ -36,39 +36,122 @@ logger = logging.getLogger("seedguard")
 SOURCE = "seedguard"
 
 
-def session_of(kwargs: Dict[str, Any], event: Any = None) -> str:
-    """The conversation id for this call, so secrets stay scoped to one chat.
+# A gateway chat whose identity could not be computed. Used as an *isolated*
+# vault bucket on the defensive redaction path (the model is still protected) and
+# as a refusal signal for the slash command. It is deliberately NOT the shared CLI
+# default ``DEFAULT_SESSION`` -- that is the bug this fixes: one chat's catches must
+# never surface in, or be wiped by, another chat.
+NO_SESSION = "\x00seedguard-no-session"
 
-    Hermes passes ``session_id`` to the middleware/hooks and to the command
-    handler; on a gateway it also carries a session on the event. When nothing
-    is available (the CLI, or a unit test) we use the single default session.
+# Non-chat client surfaces. The CLI / TUI / desktop are a single local session with
+# no cross-chat concern, so they share the one default bucket. (``Platform.LOCAL`` is
+# ``"local"``; the CLI slash-command path reports ``"cli"``.)
+_LOCAL_SURFACES = frozenset({"", "cli", "local", "tui", "desktop"})
+
+_SESSION_ENV: Any = None
+_SESSION_ENV_TRIED = False
+
+
+def _session_env():
+    """Hermes' public per-session context reader (``gateway.session_context``),
+    or ``None`` when running outside a gateway process (CLI tools, unit tests)."""
+    global _SESSION_ENV, _SESSION_ENV_TRIED
+    if not _SESSION_ENV_TRIED:
+        _SESSION_ENV_TRIED = True
+        try:
+            from gateway.session_context import get_session_env  # public API
+            _SESSION_ENV = get_session_env
+        except Exception:
+            _SESSION_ENV = None
+    return _SESSION_ENV
+
+
+def _compose(platform: Any, chat_id: Any, thread_id: Any, user_id: Any) -> str:
+    """Build the canonical vault key from the four identity fields every path shares.
+
+    The key must be byte-identical whether it is computed on the inbound path from
+    ``event.source`` or read back on the turn/tool paths from
+    ``get_session_env("HERMES_SESSION_*")``. The gateway binds those env vars from
+    the very same ``SessionSource`` as ``str(x) if x else ""`` (see
+    ``gateway/run.py`` ``_set_session_env``), so this normalises identically.
     """
+    platform = str(platform) if platform else ""
+    chat_id = str(chat_id) if chat_id else ""
+    thread_id = str(thread_id) if thread_id else ""
+    user_id = str(user_id) if user_id else ""
+    if not chat_id:
+        # No chat id: a local client is the single default session; a real messaging
+        # surface we cannot key is isolated (never the shared default).
+        return DEFAULT_SESSION if platform.lower() in _LOCAL_SURFACES else NO_SESSION
+    return "\x1f".join(("sg1", platform, chat_id, thread_id, user_id))
+
+
+def _from_source(src: Any) -> str:
+    """Key a ``SessionSource`` (``event.source`` on inbound, the ``source`` kwarg on a
+    gateway command). ``platform`` is a ``Platform`` enum -> ``.value``.
+
+    The turn/tool paths read the key back from ``HERMES_SESSION_*``, which the gateway
+    binds through ``gateway.session_detached.session_env_source``. That helper drops the
+    user from a *shared, non-DM* chat's route (Telegram observe mode etc.), binding
+    ``HERMES_SESSION_USER_ID`` empty. We mirror that strip here so the inbound/command
+    key matches the turn-path key for the same chat -- otherwise a secret pasted in a
+    group could be armed but never released to a tool. (A DM's chat id already
+    identifies the user, so nothing is lost.)
+    """
+    platform = getattr(getattr(src, "platform", None), "value", None)
+    if platform is None:
+        platform = getattr(src, "platform", None)  # already a plain string
+    user_id = getattr(src, "user_id", None)
+    if getattr(src, "shared_session", False) and getattr(src, "chat_type", None) != "dm":
+        user_id = None
+    return _compose(platform, getattr(src, "chat_id", None),
+                    getattr(src, "thread_id", None), user_id)
+
+
+def _offgateway(kwargs: Dict[str, Any]) -> str:
+    """CLI / programmatic callers: an explicit session id, else the one local session."""
     for key in ("session_id", "session", "chat_id", "conversation_id"):
         v = kwargs.get(key)
-        if v is None:
-            continue
         if isinstance(v, (str, int)):
             s = str(v).strip()
             if s:
                 return s
-        sid = getattr(v, "id", None) or getattr(v, "session_id", None)
-        if sid:
-            return str(sid)
-    containers = [event if event is not None else kwargs.get("event"),
-                  kwargs.get("ctx"), kwargs.get("context")]
-    for ev in containers:
-        if ev is None:
-            continue
-        for attr in ("session_id", "chat_id", "conversation_id"):
-            val = getattr(ev, attr, None)
-            if val:
-                return str(val)
-        sess = getattr(ev, "session", None)
-        if sess is not None:
-            sid = getattr(sess, "id", None) or getattr(sess, "session_id", None)
-            if sid:
-                return str(sid)
     return DEFAULT_SESSION
+
+
+def session_of(kwargs: Dict[str, Any], *, event: Any = None, command: bool = False) -> str:
+    """The vault key for this call, keyed by a chat identity every path can compute,
+    so a secret caught in one chat is never visible to -- or releasable by -- another.
+
+    Three entry contexts, each knowing its own shape (``MessageEvent`` carries no
+    session/chat id of its own -- the id lives on ``event.source``):
+
+    * **Gateway inbound** (``event=`` given): runs before the session is bound, so the
+      identity comes from ``event.source``.
+    * **Slash command** (``command=True``): core passes a ``SessionSource`` as ``source``
+      on a gateway, or ``source=None`` + ``platform="cli"`` on the CLI.
+    * **Turn / tool middleware and output hooks** (neither): the gateway has bound the
+      full identity in task-local context vars; the callback kwargs carry only
+      ``platform`` + ``session_id``, so the identity is read from ``get_session_env``.
+
+    Returns ``NO_SESSION`` for a gateway event/command whose chat cannot be identified;
+    callers refuse rather than fall back to the shared default bucket. Off a gateway
+    (CLI, tests) it falls back to an explicit ``session_id`` or the single default.
+    """
+    if event is not None:
+        src = getattr(event, "source", None)
+        return _from_source(src) if src is not None else NO_SESSION
+    if command:
+        src = kwargs.get("source")
+        return _from_source(src) if src is not None else _offgateway(kwargs)
+    env = _session_env()
+    if env is not None:
+        platform = env("HERMES_SESSION_PLATFORM")
+        chat_id = env("HERMES_SESSION_CHAT_ID")
+        if chat_id or (platform and str(platform).strip().lower() not in _LOCAL_SURFACES):
+            return _compose(platform, chat_id,
+                            env("HERMES_SESSION_THREAD_ID"), env("HERMES_SESSION_USER_ID"))
+    return _offgateway(kwargs)
 
 
 class Runtime:

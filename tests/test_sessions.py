@@ -4,28 +4,154 @@ The vault is keyed by conversation id. On a multi-user gateway one chat must
 never see, arm, or rehydrate another chat's secrets; a placeholder that leaks
 from chat A into chat B must stay locked in B.
 """
+from dataclasses import dataclass
+from enum import Enum
+from typing import Optional
+
 from seedguard.commands import make_handler
-from seedguard.hooks import build_callbacks, session_of
+from seedguard.hooks import NO_SESSION, build_callbacks, session_of
 from seedguard.redact import placeholders_in
 from seedguard.vault import DEFAULT_SESSION, Vault
 
 from .vectors import EVM_KEY, SEED_12
 
 
+# -- real gateway shapes ------------------------------------------------------
+# These mirror the real ``gateway.session.Platform`` / ``SessionSource`` and
+# ``gateway.platforms.event.MessageEvent`` attributes: the chat identity lives on
+# ``event.source`` (platform.value, chat_id, thread_id, user_id), NOT on the event
+# itself. Hermes core isn't importable in CI, so we reproduce the shape faithfully.
+
+class _Platform(Enum):
+    TELEGRAM = "telegram"
+    DISCORD = "discord"
+    LOCAL = "local"
+
+
+@dataclass
+class _SessionSource:
+    platform: _Platform
+    chat_id: str
+    thread_id: Optional[str] = None
+    user_id: Optional[str] = None
+    chat_type: str = "dm"
+    shared_session: bool = False
+
+
+@dataclass
+class _MessageEvent:
+    text: str
+    source: Optional[_SessionSource] = None
+
+
+def _event(text, **src):
+    return _MessageEvent(text=text, source=_SessionSource(**src))
+
+
 # -- session_of ---------------------------------------------------------------
 
-def test_session_of_prefers_session_id():
+def test_session_of_offgateway_prefers_session_id():
+    # CLI / programmatic callers: an explicit id, else the single local session.
     assert session_of({"session_id": "chatA"}) == "chatA"
     assert session_of({"session": 42}) == "42"
     assert session_of({}) == DEFAULT_SESSION
 
 
-def test_session_of_reads_gateway_event():
-    class Ev:
-        session_id = "tg:999"
-        text = "hi"
+def test_session_of_reads_gateway_event_source():
+    # Inbound: the key comes from event.source, not a (nonexistent) event.session_id.
+    key = session_of({}, event=_event("hi", platform=_Platform.TELEGRAM,
+                                       chat_id="999", user_id="u1"))
+    assert key not in (DEFAULT_SESSION, NO_SESSION)
+    assert "telegram" in key and "999" in key
 
-    assert session_of({}, event=Ev()) == "tg:999"
+
+def test_gateway_inbound_command_and_turn_paths_agree(monkeypatch):
+    # The headline flow: a secret pasted in Telegram, armed from that chat, used by a
+    # tool. All three paths must compute the SAME key for the same chat.
+    src = dict(platform=_Platform.TELEGRAM, chat_id="555", thread_id="7", user_id="u9")
+
+    inbound = session_of({}, event=_event("hi", **src))
+    command = session_of({"source": _SessionSource(**src)}, command=True)
+
+    # Turn/tool path reads the identity the gateway bound into HERMES_SESSION_* vars
+    # (gateway/run.py binds them from this same SessionSource as ``str(x) if x else ""``).
+    bound = {
+        "HERMES_SESSION_PLATFORM": "telegram",
+        "HERMES_SESSION_CHAT_ID": "555",
+        "HERMES_SESSION_THREAD_ID": "7",
+        "HERMES_SESSION_USER_ID": "u9",
+    }
+    monkeypatch.setattr("seedguard.hooks._session_env",
+                        lambda: (lambda name, default="": bound.get(name, default)))
+    turn = session_of({"session_id": "ignored-when-bound", "platform": "telegram"})
+
+    assert inbound == command == turn
+    assert turn not in (DEFAULT_SESSION, NO_SESSION)
+
+
+def test_shared_group_chat_key_parity(monkeypatch):
+    # In a shared (non-DM) chat, Hermes' session_env_source strips the user from the
+    # turn-path route (HERMES_SESSION_USER_ID=""), while the inbound event and the
+    # slash command still carry the sender. The vault key must match anyway, or a
+    # secret armed in a group could never be released to a tool there.
+    src = _SessionSource(_Platform.TELEGRAM, chat_id="group1", user_id="sender42",
+                         chat_type="group", shared_session=True)
+    inbound = session_of({}, event=_MessageEvent(text="hi", source=src))
+    command = session_of({"source": src}, command=True)
+
+    bound = {  # what the gateway binds for a shared chat: user id dropped
+        "HERMES_SESSION_PLATFORM": "telegram",
+        "HERMES_SESSION_CHAT_ID": "group1",
+        "HERMES_SESSION_THREAD_ID": "",
+        "HERMES_SESSION_USER_ID": "",
+    }
+    monkeypatch.setattr("seedguard.hooks._session_env",
+                        lambda: (lambda name, default="": bound.get(name, default)))
+    turn = session_of({})
+
+    assert inbound == command == turn
+    assert "sender42" not in turn  # the stripped user is not in the key
+
+
+def test_gateway_distinct_chats_get_distinct_keys():
+    a = session_of({}, event=_event("x", platform=_Platform.TELEGRAM, chat_id="1", user_id="u"))
+    b = session_of({}, event=_event("x", platform=_Platform.TELEGRAM, chat_id="2", user_id="u"))
+    c = session_of({}, event=_event("x", platform=_Platform.DISCORD, chat_id="1", user_id="u"))
+    assert a != b != c and a != c
+
+
+def test_session_of_accepts_plain_string_platform():
+    # A source whose ``platform`` is already a string (no ``.value``) still keys.
+    @dataclass
+    class _StrSource:
+        platform: str
+        chat_id: str
+        thread_id: Optional[str] = None
+        user_id: Optional[str] = None
+
+    key = session_of({"source": _StrSource("telegram", "42", user_id="u")}, command=True)
+    assert "telegram" in key and "42" in key and key not in (DEFAULT_SESSION, NO_SESSION)
+
+
+def test_cli_command_is_the_local_session():
+    # cli.py dispatches /seedguard with source=None, platform="cli".
+    assert session_of({"source": None, "platform": "cli", "session_id": ""}, command=True) == DEFAULT_SESSION
+
+
+def test_gateway_without_chat_identity_refuses():
+    # A gateway source with no chat id must never fold into the shared default.
+    assert session_of({}, event=_event("x", platform=_Platform.TELEGRAM, chat_id="")) == NO_SESSION
+    assert session_of({}, event=_MessageEvent(text="x", source=None)) == NO_SESSION
+    assert session_of({"source": _SessionSource(_Platform.TELEGRAM, chat_id="")}, command=True) == NO_SESSION
+
+
+def test_command_refuses_on_unkeyable_gateway_chat(rt):
+    rt.redactor.redact_text(f"seed {SEED_12}", session="A")  # a secret exists elsewhere
+    h = make_handler(rt)
+    # A gateway command whose source carries no chat id: refuse, don't list A's catches.
+    out = h("status", source=_SessionSource(_Platform.TELEGRAM, chat_id=""), platform="telegram")
+    assert "no session" in out.lower()
+    assert "SEED_" not in out
 
 
 # -- vault isolation ----------------------------------------------------------
